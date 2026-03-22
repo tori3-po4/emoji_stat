@@ -9,12 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-
-plt.rcParams["font.family"] = "sans-serif"
+import plotly.graph_objects as go
 
 CUSTOM_EMOJI_PATTERN = re.compile(r"<a?:(\w+):(\d+)>")
 RATE_LIMIT_DELAY = 1.0  # チャンネル間のスリープ(秒)
@@ -111,21 +106,16 @@ def _save_barh(
         return
     lab, val = zip(*reversed(pairs))
 
-    fig, ax = plt.subplots(figsize=(10, max(4, len(lab) * 0.45)))
-    bars = ax.barh(range(len(lab)), val, color=color)
-    ax.set_yticks(range(len(lab)))
-    ax.set_yticklabels(lab)
-    ax.set_xlabel(xlabel)
-    ax.set_title(title)
-    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-
-    for bar, v in zip(bars, val):
-        ax.text(bar.get_width() + max(val) * 0.01, bar.get_y() + bar.get_height() / 2,
-                str(v), va="center", fontsize=8)
-
-    plt.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+    fig = go.Figure(go.Bar(
+        x=list(val), y=list(lab), orientation="h",
+        marker_color=color, text=list(val), textposition="outside",
+    ))
+    fig.update_layout(
+        title=title, xaxis_title=xlabel,
+        height=max(400, len(lab) * 35), width=900,
+        margin=dict(l=20, r=20, t=50, b=40),
+    )
+    fig.write_image(str(path), scale=2)
 
 
 def _save_stacked_bar(
@@ -145,19 +135,15 @@ def _save_stacked_bar(
     mv = [msg_vals[i] for i in order]
     rv = [react_vals[i] for i in order]
 
-    fig, ax = plt.subplots(figsize=(10, max(4, len(lab) * 0.45)))
-    y = range(len(lab))
-    ax.barh(y, mv, label="Message", color="#5865F2")
-    ax.barh(y, rv, left=mv, label="Reaction", color="#57F287")
-    ax.set_yticks(y)
-    ax.set_yticklabels(lab)
-    ax.set_xlabel("Count")
-    ax.set_title(title)
-    ax.legend()
-    ax.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    plt.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=mv, y=lab, orientation="h", name="Message", marker_color="#5865F2"))
+    fig.add_trace(go.Bar(x=rv, y=lab, orientation="h", name="Reaction", marker_color="#57F287"))
+    fig.update_layout(
+        barmode="stack", title=title, xaxis_title="Count",
+        height=max(400, len(lab) * 35), width=900,
+        margin=dict(l=20, r=20, t=50, b=40),
+    )
+    fig.write_image(str(path), scale=2)
 
 
 def _save_channel_heatmap(
@@ -182,24 +168,25 @@ def _save_channel_heatmap(
         return
 
     emoji_labels = [name for name, _ in sorted_emojis]
-    ch_labels = [channel_map.get(cid, str(cid)) for cid in top_ch_ids]
+    ch_labels = ["#" + channel_map.get(cid, str(cid)) for cid in top_ch_ids]
 
     matrix = []
     for _, s in sorted_emojis:
         row = [s.per_channel_count.get(cid, 0) for cid in top_ch_ids]
         matrix.append(row)
 
-    fig, ax = plt.subplots(figsize=(max(8, len(ch_labels) * 0.6), max(5, len(emoji_labels) * 0.45)))
-    im = ax.imshow(matrix, aspect="auto", cmap="YlGnBu")
-    ax.set_xticks(range(len(ch_labels)))
-    ax.set_xticklabels(["#" + n for n in ch_labels], rotation=45, ha="right", fontsize=7)
-    ax.set_yticks(range(len(emoji_labels)))
-    ax.set_yticklabels(emoji_labels, fontsize=8)
-    ax.set_title("Emoji x Channel Usage Count")
-    fig.colorbar(im, ax=ax, shrink=0.8)
-    plt.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
+    fig = go.Figure(go.Heatmap(
+        z=matrix, x=ch_labels, y=emoji_labels,
+        colorscale="YlGnBu", texttemplate="%{z}", textfont_size=8,
+    ))
+    fig.update_layout(
+        title="絵文字 × チャンネル 使用回数",
+        height=max(400, len(emoji_labels) * 35),
+        width=max(600, len(ch_labels) * 50),
+        margin=dict(l=20, r=20, t=50, b=40),
+        xaxis=dict(tickangle=45),
+    )
+    fig.write_image(str(path), scale=2)
 
 
 # ---------------------------------------------------------------------------
@@ -280,31 +267,31 @@ def save_all_outputs(
     msg_counts = [s.msg_count for _, s in sorted_items]
     react_counts = [s.reaction_count for _, s in sorted_items]
 
-    # 1) Total usage Top 25
-    _save_barh(names, totals, "Emoji Usage Count (Top 25)", "Total Count",
+    # 1) 使用回数 Top 25
+    _save_barh(names, totals, "絵文字 使用回数 (Top 25)", "合計使用回数",
                out_dir / "01_total_count.png")
 
-    # 2) Message vs Reaction stacked bar
+    # 2) 本文 vs リアクション 積み上げ
     _save_stacked_bar(names, msg_counts, react_counts,
-                      "Message vs Reaction (Top 25)",
+                      "本文 vs リアクション (Top 25)",
                       out_dir / "02_msg_vs_reaction.png")
 
-    # 3) Message only
+    # 3) 本文のみ
     msg_names = [n for n in names if stats[n].msg_count > 0]
     _save_barh(msg_names, [stats[n].msg_count for n in msg_names],
-               "Emoji in Message Content (Top 25)", "Count",
+               "メッセージ本文中の絵文字 (Top 25)", "使用回数",
                out_dir / "03_message_count.png")
 
-    # 4) Reaction only
+    # 4) リアクションのみ
     react_names = [n for n in names if stats[n].reaction_count > 0]
     _save_barh(react_names, [stats[n].reaction_count for n in react_names],
-               "Reaction Emoji (Top 25)", "Count",
+               "リアクション絵文字 (Top 25)", "使用回数",
                out_dir / "04_reaction_count.png", color="#57F287")
 
-    # 5) Channel spread
+    # 5) チャンネル使用数
     ch_counts = [len(s.channels) for _, s in sorted_items]
-    _save_barh(names, ch_counts, "Channels per Emoji (Top 25)",
-               "Channel Count", out_dir / "05_channel_spread.png", color="#FEE75C")
+    _save_barh(names, ch_counts, "絵文字が使われたチャンネル数 (Top 25)",
+               "チャンネル数", out_dir / "05_channel_spread.png", color="#FEE75C")
 
     # 6) チャンネル×絵文字 ヒートマップ
     _save_channel_heatmap(stats, channel_map, out_dir / "06_channel_heatmap.png")
@@ -390,7 +377,6 @@ async def emoji_stat(ctx: discord.ApplicationContext):
         f"- チャンネル数: {scanned_channels}\n"
         f"- メッセージ数: {scanned_messages}\n"
         f"- ユニーク絵文字数: {len(stats)}\n"
-        f"- 保存先: `{out_dir.resolve()}`\n"
     )
 
     files = []
