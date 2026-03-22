@@ -91,4 +91,4 @@ uv run main.py --token YOUR_BOT_TOKEN
 ## 技術スタック
 
 - [py-cord](https://github.com/Pycord-Development/pycord) — Discord Bot フレームワーク
-- [Plotly](https://plotly.com/python/) + [Kaleido](https://github.com/nicholasgasior/kaleido) — グラフ生成・PNG出力
+- [Plotly](https://plotly.com/python/) + [Kaleido](https://github.com/plotly/Kaleido) — グラフ生成・PNG出力
