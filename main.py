@@ -20,6 +20,7 @@ class EmojiStat:
     """1つの絵文字に関する詳細統計。"""
     msg_count: int = 0
     reaction_count: int = 0
+    is_custom: bool = True
     channels: set = field(default_factory=set)
     per_channel_count: dict = field(default_factory=lambda: defaultdict(int))
 
@@ -72,12 +73,14 @@ async def scan_channel(
 
         # リアクション
         for reaction in message.reactions:
+            is_custom = hasattr(reaction.emoji, "id")
             emoji_name = (
                 reaction.emoji.name
                 if hasattr(reaction.emoji, "name")
                 else str(reaction.emoji)
             )
             s = stats[emoji_name]
+            s.is_custom = is_custom
             s.reaction_count += reaction.count
             s.channels.add(channel.id)
             s.per_channel_count[channel.id] += reaction.count
@@ -105,6 +108,33 @@ def _save_barh(
     if not pairs:
         return
     lab, val = zip(*reversed(pairs))
+
+    fig = go.Figure(go.Bar(
+        x=list(val), y=list(lab), orientation="h",
+        marker_color=color, text=list(val), textposition="outside",
+    ))
+    fig.update_layout(
+        title=title, xaxis_title=xlabel,
+        height=max(400, len(lab) * 35), width=900,
+        margin=dict(l=20, r=20, t=50, b=40),
+    )
+    fig.write_image(str(path), scale=2)
+
+
+def _save_barh_bottom(
+    labels: list[str],
+    values: list[int],
+    title: str,
+    xlabel: str,
+    path: Path,
+    bottom_n: int = 25,
+    color: str = "#ED4245",
+):
+    """使用頻度が低い順の横棒グラフ保存ヘルパー。"""
+    pairs = sorted(zip(labels, values), key=lambda x: x[1])[:bottom_n]
+    if not pairs:
+        return
+    lab, val = zip(*pairs)
 
     fig = go.Figure(go.Bar(
         x=list(val), y=list(lab), orientation="h",
@@ -293,8 +323,82 @@ def save_all_outputs(
     _save_barh(names, ch_counts, "絵文字が使われたチャンネル数 (Top 25)",
                "チャンネル数", out_dir / "05_channel_spread.png", color="#FEE75C")
 
-    # 6) チャンネル×絵文字 ヒートマップ
-    _save_channel_heatmap(stats, channel_map, out_dir / "06_channel_heatmap.png")
+    # 6) 使用回数 Bottom 25
+    _save_barh_bottom(names, totals, "絵文字 使用回数 (Bottom 25)", "合計使用回数",
+                      out_dir / "06_total_count_bottom.png")
+
+    # 7) 本文のみ Bottom 25
+    _save_barh_bottom(msg_names, [stats[n].msg_count for n in msg_names],
+                      "メッセージ本文中の絵文字 (Bottom 25)", "使用回数",
+                      out_dir / "07_message_count_bottom.png")
+
+    # 8) リアクションのみ Bottom 25
+    _save_barh_bottom(react_names, [stats[n].reaction_count for n in react_names],
+                      "リアクション絵文字 (Bottom 25)", "使用回数",
+                      out_dir / "08_reaction_count_bottom.png")
+
+    # 9) チャンネル使用数 Bottom 25
+    _save_barh_bottom(names, ch_counts, "絵文字が使われたチャンネル数 (Bottom 25)",
+                      "チャンネル数", out_dir / "09_channel_spread_bottom.png", color="#FEE75C")
+
+    # 10) チャンネル×絵文字 ヒートマップ
+    _save_channel_heatmap(stats, channel_map, out_dir / "10_channel_heatmap.png")
+
+    # --- カスタム絵文字のみ ---
+    custom_stats = {n: s for n, s in stats.items() if s.is_custom}
+    custom_items = [(n, s) for n, s in sorted_items if s.is_custom]
+    if custom_items:
+        c_names = [n for n, _ in custom_items]
+        c_totals = [s.total_count for _, s in custom_items]
+        c_msg = [s.msg_count for _, s in custom_items]
+        c_react = [s.reaction_count for _, s in custom_items]
+
+        # 11) カスタム絵文字 使用回数 Top 25
+        _save_barh(c_names, c_totals, "カスタム絵文字 使用回数 (Top 25)", "合計使用回数",
+                   out_dir / "11_custom_total_count.png")
+
+        # 12) カスタム絵文字 本文 vs リアクション
+        _save_stacked_bar(c_names, c_msg, c_react,
+                          "カスタム絵文字 本文 vs リアクション (Top 25)",
+                          out_dir / "12_custom_msg_vs_reaction.png")
+
+        # 13) カスタム絵文字 本文のみ Top 25
+        c_msg_names = [n for n in c_names if custom_stats[n].msg_count > 0]
+        _save_barh(c_msg_names, [custom_stats[n].msg_count for n in c_msg_names],
+                   "カスタム絵文字 メッセージ本文 (Top 25)", "使用回数",
+                   out_dir / "13_custom_message_count.png")
+
+        # 14) カスタム絵文字 リアクションのみ Top 25
+        c_react_names = [n for n in c_names if custom_stats[n].reaction_count > 0]
+        _save_barh(c_react_names, [custom_stats[n].reaction_count for n in c_react_names],
+                   "カスタム絵文字 リアクション (Top 25)", "使用回数",
+                   out_dir / "14_custom_reaction_count.png", color="#57F287")
+
+        # 15) カスタム絵文字 チャンネル使用数 Top 25
+        c_ch_counts = [len(s.channels) for _, s in custom_items]
+        _save_barh(c_names, c_ch_counts, "カスタム絵文字が使われたチャンネル数 (Top 25)",
+                   "チャンネル数", out_dir / "15_custom_channel_spread.png", color="#FEE75C")
+
+        # 16) カスタム絵文字 使用回数 Bottom 25
+        _save_barh_bottom(c_names, c_totals, "カスタム絵文字 使用回数 (Bottom 25)", "合計使用回数",
+                          out_dir / "16_custom_total_count_bottom.png")
+
+        # 17) カスタム絵文字 本文のみ Bottom 25
+        _save_barh_bottom(c_msg_names, [custom_stats[n].msg_count for n in c_msg_names],
+                          "カスタム絵文字 メッセージ本文 (Bottom 25)", "使用回数",
+                          out_dir / "17_custom_message_count_bottom.png")
+
+        # 18) カスタム絵文字 リアクションのみ Bottom 25
+        _save_barh_bottom(c_react_names, [custom_stats[n].reaction_count for n in c_react_names],
+                          "カスタム絵文字 リアクション (Bottom 25)", "使用回数",
+                          out_dir / "18_custom_reaction_count_bottom.png")
+
+        # 19) カスタム絵文字 チャンネル使用数 Bottom 25
+        _save_barh_bottom(c_names, c_ch_counts, "カスタム絵文字が使われたチャンネル数 (Bottom 25)",
+                          "チャンネル数", out_dir / "19_custom_channel_spread_bottom.png", color="#FEE75C")
+
+        # 20) カスタム絵文字 チャンネル×絵文字 ヒートマップ
+        _save_channel_heatmap(custom_stats, channel_map, out_dir / "20_custom_channel_heatmap.png")
 
     # CSV
     save_summary_csv(stats, channel_map, out_dir / "emoji_summary.csv")
@@ -362,6 +466,11 @@ async def emoji_stat(ctx: discord.ApplicationContext):
 
         await asyncio.sleep(RATE_LIMIT_DELAY)
 
+    # サーバーのカスタム絵文字のうち未使用のものを stats に追加
+    for emoji in guild.emojis:
+        if emoji.name not in stats:
+            stats[emoji.name] = EmojiStat(is_custom=True)
+
     print(f"スキャン完了: {scanned_channels} チャンネル, {scanned_messages} メッセージ, {len(stats)} 絵文字")
 
     # --- ローカル保存 ---
@@ -371,24 +480,25 @@ async def emoji_stat(ctx: discord.ApplicationContext):
     )
     print(f"Results saved to: {out_dir.resolve()}")
 
-    # --- Discord に主要グラフ + CSV を送信 ---
+    # --- Discord にサマリーを送信 ---
     summary = (
         f"**スキャン完了**\n"
         f"- チャンネル数: {scanned_channels}\n"
         f"- メッセージ数: {scanned_messages}\n"
         f"- ユニーク絵文字数: {len(stats)}\n"
     )
+    await ctx.followup.send(summary)
 
-    files = []
-    for png in sorted(out_dir.glob("*.png")):
-        files.append(discord.File(str(png), filename=png.name))
-    for csv_file in sorted(out_dir.glob("*.csv")):
-        files.append(discord.File(str(csv_file), filename=csv_file.name))
-
-    # Discord の添付上限 (10ファイル) に対応して分割送信
-    await ctx.followup.send(summary, files=files[:10])
-    for chunk_start in range(10, len(files), 10):
-        await ctx.followup.send(files=files[chunk_start:chunk_start + 10])
+    # files = []
+    # for png in sorted(out_dir.glob("*.png")):
+    #     files.append(discord.File(str(png), filename=png.name))
+    # for csv_file in sorted(out_dir.glob("*.csv")):
+    #     files.append(discord.File(str(csv_file), filename=csv_file.name))
+    #
+    # # Discord の添付上限 (10ファイル) に対応して分割送信
+    # await ctx.followup.send(summary, files=files[:10])
+    # for chunk_start in range(10, len(files), 10):
+    #     await ctx.followup.send(files=files[chunk_start:chunk_start + 10])
 
 
 def main():
