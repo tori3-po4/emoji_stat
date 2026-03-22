@@ -195,7 +195,7 @@ def _save_channel_heatmap(
     ax.set_xticklabels(["#" + n for n in ch_labels], rotation=45, ha="right", fontsize=7)
     ax.set_yticks(range(len(emoji_labels)))
     ax.set_yticklabels(emoji_labels, fontsize=8)
-    ax.set_title("絵文字 × チャンネル 使用回数")
+    ax.set_title("Emoji x Channel Usage Count")
     fig.colorbar(im, ax=ax, shrink=0.8)
     plt.tight_layout()
     fig.savefig(path, dpi=150)
@@ -280,31 +280,31 @@ def save_all_outputs(
     msg_counts = [s.msg_count for _, s in sorted_items]
     react_counts = [s.reaction_count for _, s in sorted_items]
 
-    # 1) 使用回数 Top 25
-    _save_barh(names, totals, "絵文字 使用回数 (Top 25)", "合計使用回数",
+    # 1) Total usage Top 25
+    _save_barh(names, totals, "Emoji Usage Count (Top 25)", "Total Count",
                out_dir / "01_total_count.png")
 
-    # 2) 本文 vs リアクション 積み上げ
+    # 2) Message vs Reaction stacked bar
     _save_stacked_bar(names, msg_counts, react_counts,
-                      "本文 vs リアクション (Top 25)",
+                      "Message vs Reaction (Top 25)",
                       out_dir / "02_msg_vs_reaction.png")
 
-    # 3) 本文のみ
+    # 3) Message only
     msg_names = [n for n in names if stats[n].msg_count > 0]
     _save_barh(msg_names, [stats[n].msg_count for n in msg_names],
-               "メッセージ本文中の絵文字 (Top 25)", "使用回数",
+               "Emoji in Message Content (Top 25)", "Count",
                out_dir / "03_message_count.png")
 
-    # 4) リアクションのみ
+    # 4) Reaction only
     react_names = [n for n in names if stats[n].reaction_count > 0]
     _save_barh(react_names, [stats[n].reaction_count for n in react_names],
-               "リアクション絵文字 (Top 25)", "使用回数",
+               "Reaction Emoji (Top 25)", "Count",
                out_dir / "04_reaction_count.png", color="#57F287")
 
-    # 5) チャンネル使用数
+    # 5) Channel spread
     ch_counts = [len(s.channels) for _, s in sorted_items]
-    _save_barh(names, ch_counts, "絵文字が使われたチャンネル数 (Top 25)",
-               "チャンネル数", out_dir / "05_channel_spread.png", color="#FEE75C")
+    _save_barh(names, ch_counts, "Channels per Emoji (Top 25)",
+               "Channel Count", out_dir / "05_channel_spread.png", color="#FEE75C")
 
     # 6) チャンネル×絵文字 ヒートマップ
     _save_channel_heatmap(stats, channel_map, out_dir / "06_channel_heatmap.png")
@@ -348,6 +348,7 @@ async def emoji_stat(ctx: discord.ApplicationContext):
 
     channel_map = {ch.id: ch.name for ch in text_channels}
 
+    print(f"スキャン開始: {len(text_channels)} チャンネル対象")
     status_msg = await ctx.followup.send(
         f"スキャン開始: {len(text_channels)} チャンネル対象"
     )
@@ -357,10 +358,11 @@ async def emoji_stat(ctx: discord.ApplicationContext):
             count = await scan_channel(channel, stats)
             scanned_channels += 1
             scanned_messages += count
+            print(f"  [{i}/{len(text_channels)}] #{channel.name}: {count} メッセージ")
         except discord.Forbidden:
-            pass
+            print(f"  [{i}/{len(text_channels)}] #{channel.name}: アクセス拒否 (スキップ)")
         except Exception as e:
-            print(f"Error scanning #{channel.name}: {e}")
+            print(f"  [{i}/{len(text_channels)}] #{channel.name}: エラー: {e}")
 
         if i % 5 == 0 or i == len(text_channels):
             try:
@@ -372,6 +374,8 @@ async def emoji_stat(ctx: discord.ApplicationContext):
                 pass
 
         await asyncio.sleep(RATE_LIMIT_DELAY)
+
+    print(f"スキャン完了: {scanned_channels} チャンネル, {scanned_messages} メッセージ, {len(stats)} 絵文字")
 
     # --- ローカル保存 ---
     out_dir = save_all_outputs(
