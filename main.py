@@ -2,8 +2,6 @@ import discord
 import argparse
 import asyncio
 import csv
-import io
-import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
