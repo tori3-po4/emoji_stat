@@ -25,19 +25,12 @@ class EmojiStat:
     """1つの絵文字に関する詳細統計。"""
     msg_count: int = 0
     reaction_count: int = 0
-    msg_users: set = field(default_factory=set)
-    reaction_users: set = field(default_factory=set)
     channels: set = field(default_factory=set)
     per_channel_count: dict = field(default_factory=lambda: defaultdict(int))
-    per_user_count: dict = field(default_factory=lambda: defaultdict(int))
 
     @property
     def total_count(self) -> int:
         return self.msg_count + self.reaction_count
-
-    @property
-    def unique_users(self) -> int:
-        return len(self.msg_users | self.reaction_users)
 
 
 class EmojiBot(discord.Bot):
@@ -61,30 +54,26 @@ class EmojiBot(discord.Bot):
             raise Exception("Failed to log in Discord server")
 
 
-bot = EmojiBot(intents=discord.Intents.default())
+intents = discord.Intents.default()
+intents.message_content = True
+bot = EmojiBot(intents=intents)
 
 
 async def scan_channel(
     channel: discord.TextChannel,
     stats: dict[str, EmojiStat],
-    user_map: dict[int, str],
 ) -> int:
     """1チャンネル分のメッセージを遡り、stats を更新する。"""
     total = 0
 
     async for message in channel.history(limit=None, oldest_first=True):
-        author_id = message.author.id
-        user_map[author_id] = str(message.author)
-
         # メッセージ本文中のカスタム絵文字
         for match in CUSTOM_EMOJI_PATTERN.finditer(message.content):
             name = match.group(1)
             s = stats[name]
             s.msg_count += 1
-            s.msg_users.add(author_id)
             s.channels.add(channel.id)
             s.per_channel_count[channel.id] += 1
-            s.per_user_count[author_id] += 1
 
         # リアクション
         for reaction in message.reactions:
@@ -97,14 +86,6 @@ async def scan_channel(
             s.reaction_count += reaction.count
             s.channels.add(channel.id)
             s.per_channel_count[channel.id] += reaction.count
-
-            try:
-                async for user in reaction.users():
-                    s.reaction_users.add(user.id)
-                    s.per_user_count[user.id] += 1
-                    user_map[user.id] = str(user)
-            except discord.Forbidden:
-                pass
 
         total += 1
 
@@ -179,49 +160,6 @@ def _save_stacked_bar(
     plt.close(fig)
 
 
-def _save_user_heatmap(
-    stats: dict[str, EmojiStat],
-    user_map: dict[int, str],
-    path: Path,
-    top_emoji: int = 20,
-    top_users: int = 20,
-):
-    """絵文字×ユーザーのヒートマップ。"""
-    sorted_emojis = sorted(stats.items(), key=lambda x: x[1].total_count, reverse=True)[:top_emoji]
-    if not sorted_emojis:
-        return
-
-    # 全ユーザーの合計使用数でソート
-    all_user_counts: Counter = Counter()
-    for _, s in sorted_emojis:
-        for uid, cnt in s.per_user_count.items():
-            all_user_counts[uid] += cnt
-    top_user_ids = [uid for uid, _ in all_user_counts.most_common(top_users)]
-
-    if not top_user_ids:
-        return
-
-    emoji_labels = [name for name, _ in sorted_emojis]
-    user_labels = [user_map.get(uid, str(uid)) for uid in top_user_ids]
-
-    matrix = []
-    for _, s in sorted_emojis:
-        row = [s.per_user_count.get(uid, 0) for uid in top_user_ids]
-        matrix.append(row)
-
-    fig, ax = plt.subplots(figsize=(max(8, len(user_labels) * 0.6), max(5, len(emoji_labels) * 0.45)))
-    im = ax.imshow(matrix, aspect="auto", cmap="YlOrRd")
-    ax.set_xticks(range(len(user_labels)))
-    ax.set_xticklabels(user_labels, rotation=45, ha="right", fontsize=7)
-    ax.set_yticks(range(len(emoji_labels)))
-    ax.set_yticklabels(emoji_labels, fontsize=8)
-    ax.set_title("絵文字 × ユーザー 使用回数")
-    fig.colorbar(im, ax=ax, shrink=0.8)
-    plt.tight_layout()
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-
-
 def _save_channel_heatmap(
     stats: dict[str, EmojiStat],
     channel_map: dict[int, str],
@@ -271,7 +209,6 @@ def _save_channel_heatmap(
 def save_summary_csv(
     stats: dict[str, EmojiStat],
     channel_map: dict[int, str],
-    user_map: dict[int, str],
     path: Path,
 ):
     """絵文字ごとの集計 CSV。"""
@@ -279,49 +216,14 @@ def save_summary_csv(
         writer = csv.writer(f)
         writer.writerow([
             "emoji", "total_count", "msg_count", "reaction_count",
-            "unique_users", "msg_unique_users", "reaction_unique_users",
             "channel_count", "channels",
         ])
         for name, s in sorted(stats.items(), key=lambda x: x[1].total_count, reverse=True):
             ch_names = sorted(channel_map.get(cid, str(cid)) for cid in s.channels)
             writer.writerow([
                 name, s.total_count, s.msg_count, s.reaction_count,
-                s.unique_users, len(s.msg_users), len(s.reaction_users),
                 len(s.channels), ";".join(ch_names),
             ])
-
-
-def save_per_user_csv(
-    stats: dict[str, EmojiStat],
-    user_map: dict[int, str],
-    path: Path,
-):
-    """ユーザー×絵文字の使用回数 CSV。"""
-    all_user_ids: set = set()
-    for s in stats.values():
-        all_user_ids |= set(s.per_user_count.keys())
-
-    # ユーザーを合計使用数でソート
-    user_totals: Counter = Counter()
-    for s in stats.values():
-        for uid, cnt in s.per_user_count.items():
-            user_totals[uid] += cnt
-    sorted_users = [uid for uid, _ in user_totals.most_common()]
-
-    sorted_emojis = sorted(stats.items(), key=lambda x: x[1].total_count, reverse=True)
-
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(["user"] + [name for name, _ in sorted_emojis] + ["total"])
-        for uid in sorted_users:
-            row = [user_map.get(uid, str(uid))]
-            total = 0
-            for name, s in sorted_emojis:
-                cnt = s.per_user_count.get(uid, 0)
-                row.append(cnt)
-                total += cnt
-            row.append(total)
-            writer.writerow(row)
 
 
 def save_per_channel_csv(
@@ -363,7 +265,6 @@ def save_per_channel_csv(
 def save_all_outputs(
     stats: dict[str, EmojiStat],
     channel_map: dict[int, str],
-    user_map: dict[int, str],
     guild_name: str,
     scanned_channels: int,
     scanned_messages: int,
@@ -378,7 +279,6 @@ def save_all_outputs(
     totals = [s.total_count for _, s in sorted_items]
     msg_counts = [s.msg_count for _, s in sorted_items]
     react_counts = [s.reaction_count for _, s in sorted_items]
-    unique_users_list = [s.unique_users for _, s in sorted_items]
 
     # 1) 使用回数 Top 25
     _save_barh(names, totals, "絵文字 使用回数 (Top 25)", "合計使用回数",
@@ -389,36 +289,28 @@ def save_all_outputs(
                       "本文 vs リアクション (Top 25)",
                       out_dir / "02_msg_vs_reaction.png")
 
-    # 3) ユニークユーザー数
-    _save_barh(names, unique_users_list, "絵文字 ユニークユーザー数 (Top 25)",
-               "ユニークユーザー数", out_dir / "03_unique_users.png", color="#EB459E")
-
-    # 4) 本文のみ
+    # 3) 本文のみ
     msg_names = [n for n in names if stats[n].msg_count > 0]
     _save_barh(msg_names, [stats[n].msg_count for n in msg_names],
                "メッセージ本文中の絵文字 (Top 25)", "使用回数",
-               out_dir / "04_message_count.png")
+               out_dir / "03_message_count.png")
 
-    # 5) リアクションのみ
+    # 4) リアクションのみ
     react_names = [n for n in names if stats[n].reaction_count > 0]
     _save_barh(react_names, [stats[n].reaction_count for n in react_names],
                "リアクション絵文字 (Top 25)", "使用回数",
-               out_dir / "05_reaction_count.png", color="#57F287")
+               out_dir / "04_reaction_count.png", color="#57F287")
 
-    # 6) チャンネル使用数
+    # 5) チャンネル使用数
     ch_counts = [len(s.channels) for _, s in sorted_items]
     _save_barh(names, ch_counts, "絵文字が使われたチャンネル数 (Top 25)",
-               "チャンネル数", out_dir / "06_channel_spread.png", color="#FEE75C")
+               "チャンネル数", out_dir / "05_channel_spread.png", color="#FEE75C")
 
-    # 7) ユーザー×絵文字 ヒートマップ
-    _save_user_heatmap(stats, user_map, out_dir / "07_user_heatmap.png")
-
-    # 8) チャンネル×絵文字 ヒートマップ
-    _save_channel_heatmap(stats, channel_map, out_dir / "08_channel_heatmap.png")
+    # 6) チャンネル×絵文字 ヒートマップ
+    _save_channel_heatmap(stats, channel_map, out_dir / "06_channel_heatmap.png")
 
     # CSV
-    save_summary_csv(stats, channel_map, user_map, out_dir / "emoji_summary.csv")
-    save_per_user_csv(stats, user_map, out_dir / "emoji_per_user.csv")
+    save_summary_csv(stats, channel_map, out_dir / "emoji_summary.csv")
     save_per_channel_csv(stats, channel_map, out_dir / "emoji_per_channel.csv")
 
     # サマリーテキスト
@@ -444,7 +336,6 @@ async def emoji_stat(ctx: discord.ApplicationContext):
         return
 
     stats: dict[str, EmojiStat] = defaultdict(EmojiStat)
-    user_map: dict[int, str] = {}
     scanned_channels = 0
     scanned_messages = 0
 
@@ -463,7 +354,7 @@ async def emoji_stat(ctx: discord.ApplicationContext):
 
     for i, channel in enumerate(text_channels, 1):
         try:
-            count = await scan_channel(channel, stats, user_map)
+            count = await scan_channel(channel, stats)
             scanned_channels += 1
             scanned_messages += count
         except discord.Forbidden:
@@ -484,7 +375,7 @@ async def emoji_stat(ctx: discord.ApplicationContext):
 
     # --- ローカル保存 ---
     out_dir = save_all_outputs(
-        stats, channel_map, user_map, guild.name,
+        stats, channel_map, guild.name,
         scanned_channels, scanned_messages,
     )
     print(f"Results saved to: {out_dir.resolve()}")
